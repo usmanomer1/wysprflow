@@ -2,6 +2,12 @@
 
 ![wysprflow logo](src/assets/wysprflow-logo.png)
 
+<p align="center">
+  <a href="https://github.com/usmanomer1/wysprflow/releases/latest">
+    <img src="https://img.shields.io/badge/Download-macOS%20DMG-black?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS DMG" />
+  </a>
+</p>
+
 Open-source voice dictation for macOS.
 
 `wysprflow` listens while you hold a hotkey, streams speech to text, optionally cleans the transcript with an LLM, and pastes the result back into the focused app.
@@ -24,7 +30,11 @@ Open-source voice dictation for macOS.
 
 ## Install
 
-Public download links are documented in [docs/landing-page.md](docs/landing-page.md). Until the GitHub repo is live, build a local DMG:
+The primary install path for users is the latest macOS release on GitHub:
+
+- [Download the latest macOS DMG](https://github.com/usmanomer1/wysprflow/releases/latest)
+
+If you want to build a local DMG yourself:
 
 ```bash
 pnpm install
@@ -118,7 +128,6 @@ Contributor setup is in [docs/setup.md](docs/setup.md).
 - [docs/providers.md](docs/providers.md) - provider matrix and key setup
 - [docs/troubleshooting.md](docs/troubleshooting.md) - common failures and fixes
 - [docs/release.md](docs/release.md) - versioning, GitHub releases, DMGs, signing
-- [docs/landing-page.md](docs/landing-page.md) - landing page copy and download link patterns
 - [docs/roadmap.md](docs/roadmap.md) - shipped vs planned work
 
 ## Privacy

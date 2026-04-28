@@ -13,6 +13,9 @@ use anyhow::Result;
 use tauri::AppHandle;
 
 #[cfg(target_os = "macos")]
+use core_graphics::event_source::CGEventSourceStateID;
+
+#[cfg(target_os = "macos")]
 static FN_AVAILABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 #[cfg(target_os = "macos")]
 static FN_THREAD_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -60,6 +63,7 @@ fn run_tap(app: AppHandle) {
     };
     use core_graphics::event::{
         CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
+        EventField, KeyCode,
     };
     use tauri::Manager;
     use tracing::{error, info, warn};
@@ -67,17 +71,23 @@ fn run_tap(app: AppHandle) {
     use crate::pipeline::Pipeline;
 
     const FN_FLAG: u64 = 0x800000; // NSEventModifierFlagFunction
+    const FN_KEYCODE: i64 = KeyCode::FUNCTION as i64;
 
-    let last_fn = Arc::new(AtomicBool::new(false));
+    let last_fn = Arc::new(AtomicBool::new(current_function_key_is_down()));
     let app_for_cb = app.clone();
     let last_fn_cb = last_fn.clone();
 
     let tap = match CGEventTap::new(
-        CGEventTapLocation::HID,
+        CGEventTapLocation::Session,
         CGEventTapPlacement::HeadInsertEventTap,
-        CGEventTapOptions::ListenOnly,
+        CGEventTapOptions::Default,
         vec![CGEventType::FlagsChanged],
         move |_proxy, _kind, event| {
+            let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
+            if keycode != FN_KEYCODE {
+                return Some(event.clone());
+            }
+
             let flags = event.get_flags().bits();
             let fn_now = (flags & FN_FLAG) != 0;
             let prev = last_fn_cb.load(Ordering::Relaxed);
@@ -101,6 +111,7 @@ fn run_tap(app: AppHandle) {
                         }
                     });
                 }
+                return None;
             }
             Some(event.clone())
         },
@@ -141,4 +152,20 @@ fn run_tap(app: AppHandle) {
     }
     FN_AVAILABLE.store(false, Ordering::Relaxed);
     FN_THREAD_ACTIVE.store(false, Ordering::Relaxed);
+}
+
+#[cfg(target_os = "macos")]
+fn current_function_key_is_down() -> bool {
+    unsafe { cg_event_source_flags_state(CGEventSourceStateID::CombinedSessionState) & 0x800000 != 0 }
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventSourceFlagsState(state_id: CGEventSourceStateID) -> u64;
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn cg_event_source_flags_state(state_id: CGEventSourceStateID) -> u64 {
+    CGEventSourceFlagsState(state_id)
 }
