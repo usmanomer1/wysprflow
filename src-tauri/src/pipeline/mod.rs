@@ -29,6 +29,8 @@ use crate::settings::{self, keychain, DictationConfig};
 use crate::snippets;
 use crate::stt::deepgram::{self, DeepgramConnectArgs};
 
+const POST_RELEASE_AUDIO_TAIL_MS: u64 = 220;
+
 #[derive(Clone)]
 pub struct Pipeline {
     inner: Arc<Mutex<Inner>>,
@@ -254,6 +256,12 @@ async fn run_session(app: AppHandle, mut cancel: oneshot::Receiver<()>, session_
 
     // ---- Wait for hotkey release ---------------------------------------------
     let _ = (&mut cancel).await;
+
+    // Keep the mic alive for a short tail window after key-up. Without this,
+    // users tend to release the hotkey a beat before finishing the last word,
+    // which clips the trailing syllable before it ever reaches Deepgram.
+    tokio::time::sleep(Duration::from_millis(POST_RELEASE_AUDIO_TAIL_MS)).await;
+
     let _ = hud::emit_state(&app, HudState::processing_with_message("Transcribing"));
 
     // ---- Tear-down -----------------------------------------------------------
