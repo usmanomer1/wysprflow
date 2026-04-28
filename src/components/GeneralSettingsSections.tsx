@@ -7,6 +7,7 @@ import {
   tauri,
   type AudioInputDevice,
   type DictationConfig,
+  type InstallationStatus,
   type PermissionState,
   type PermissionStatus,
 } from "@/lib/tauri";
@@ -219,14 +220,21 @@ export function VoiceSettingsSection() {
 
 export function PermissionsSection() {
   const [permissions, setPermissions] = useState<PermissionStatus | null>(null);
+  const [installStatus, setInstallStatus] = useState<InstallationStatus | null>(null);
   const [busy, setBusy] = useState<"microphone" | "accessibility" | "inputMonitoring" | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const refresh = async () => {
       try {
-        const next = await tauri.checkPermissions();
-        if (!cancelled) setPermissions(next);
+        const [next, install] = await Promise.all([
+          tauri.checkPermissions(),
+          tauri.getInstallationStatus(),
+        ]);
+        if (!cancelled) {
+          setPermissions(next);
+          setInstallStatus(install);
+        }
       } catch {
         /* backend may be starting */
       }
@@ -241,7 +249,7 @@ export function PermissionsSection() {
 
   const runPermissionAction = async (
     key: "microphone" | "accessibility" | "inputMonitoring",
-    action: () => Promise<void | boolean>,
+    action: () => Promise<unknown>,
   ) => {
     setBusy(key);
     try {
@@ -257,6 +265,14 @@ export function PermissionsSection() {
 
   return (
     <div className="space-y-3">
+      {installStatus && (!installStatus.inApplications || installStatus.isTranslocated) ? (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          Move <span className="font-mono">wysprflow.app</span> into{" "}
+          <span className="font-mono">/Applications</span> before granting permissions. Running
+          from a DMG, Downloads, or a translocated path can make macOS permission grants fail to
+          stick across relaunches.
+        </div>
+      ) : null}
       <PermissionRow
         icon={Mic}
         label="Microphone"
@@ -279,9 +295,9 @@ export function PermissionsSection() {
         label="Accessibility"
         state={permissions?.accessibility ?? "notDetermined"}
         hint="Needed to paste into the focused app."
-        actionLabel="Open Settings"
+        actionLabel="Grant"
         busy={busy === "accessibility"}
-        onAction={() => runPermissionAction("accessibility", tauri.openAccessibilitySettings)}
+        onAction={() => runPermissionAction("accessibility", tauri.requestAccessibility)}
       />
       <PermissionRow
         icon={Shield}

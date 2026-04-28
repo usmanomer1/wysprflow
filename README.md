@@ -64,10 +64,11 @@ This does **not** require paying Apple. Apple Developer membership is only neede
 
 ## First Run
 
-1. Open the app.
+1. Move `wysprflow.app` into `Applications` and open it from there.
 2. Add a `Deepgram` key and either an `OpenRouter` or `Anthropic` key.
-3. Grant `Microphone` and `Accessibility`.
-4. Test dictation in `TextEdit` or `Notes`.
+3. Grant `Microphone`, `Accessibility`, and `Input Monitoring`.
+4. Test dictation in `TextEdit` or `Notes` by holding `Fn`.
+5. If your Mac reserves `Fn` for Emoji or Globe shortcuts, keep the fallback shortcut in Settings.
 
 Detailed user setup is in [docs/install-macos.md](docs/install-macos.md).
 

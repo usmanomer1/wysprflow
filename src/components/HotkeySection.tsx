@@ -82,7 +82,8 @@ export function HotkeySection() {
           </Select>
         </div>
         <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-          Fn-key dictation remains available on macOS.
+          Fn-key dictation is the default macOS path. Standard keyboard shortcuts remain
+          available if Input Monitoring or Globe/Fn behavior gets in the way.
         </div>
       </div>
 

@@ -5,6 +5,7 @@ import {
   KeyRound,
   LockKeyhole,
   CheckCircle2,
+  FolderUp,
   ArrowRight,
   ArrowLeft,
   Loader2,
@@ -14,7 +15,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { tauri, type PermissionStatus, type ProviderKey } from "@/lib/tauri";
+import {
+  tauri,
+  type InstallationStatus,
+  type PermissionStatus,
+  type ProviderKey,
+} from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -27,6 +33,7 @@ type LlmProvider = "openrouter" | "anthropic";
 export default function Setup({ onComplete }: { onComplete: () => void }) {
   const [step, setStep] = useState<StepId>("welcome");
   const [perms, setPerms] = useState<PermissionStatus | null>(null);
+  const [installStatus, setInstallStatus] = useState<InstallationStatus | null>(null);
   const [keysOk, setKeysOk] = useState({
     deepgram: false,
     openrouter: false,
@@ -51,8 +58,14 @@ export default function Setup({ onComplete }: { onComplete: () => void }) {
 
     const refreshPermissions = async () => {
       try {
-        const p = await tauri.checkPermissions();
-        if (!cancelled) setPerms(p);
+        const [p, install] = await Promise.all([
+          tauri.checkPermissions(),
+          tauri.getInstallationStatus(),
+        ]);
+        if (!cancelled) {
+          setPerms(p);
+          setInstallStatus(install);
+        }
       } catch {
         /* backend may not be ready */
       }
@@ -101,14 +114,21 @@ export default function Setup({ onComplete }: { onComplete: () => void }) {
   };
 
   const llmKeyOk = llmProvider === "openrouter" ? keysOk.openrouter : keysOk.anthropic;
+  const installReady = !!installStatus && installStatus.inApplications && !installStatus.isTranslocated;
+  const fnDefaultReady = perms?.inputMonitoring === "granted";
 
   const canAdvance = useMemo(() => {
+    if (step === "welcome") return installReady;
     if (step === "keys") return keysOk.deepgram && llmKeyOk;
     if (step === "permissions") {
-      return perms?.microphone === "granted" && perms?.accessibility === "granted";
+      return (
+        perms?.microphone === "granted" &&
+        perms?.accessibility === "granted" &&
+        perms?.inputMonitoring === "granted"
+      );
     }
     return true;
-  }, [step, keysOk, llmKeyOk, perms]);
+  }, [step, installReady, keysOk, llmKeyOk, perms]);
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -116,17 +136,24 @@ export default function Setup({ onComplete }: { onComplete: () => void }) {
         data-tauri-drag-region
         className="flex h-10 shrink-0 items-center justify-end border-b border-border/40 px-3"
       >
-        <button
-          onClick={() => finish()}
-          className="text-[11px] text-muted-foreground hover:text-foreground"
-        >
-          Skip setup
-        </button>
+        {import.meta.env.DEV ? (
+          <button
+            onClick={() => finish()}
+            className="text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            Skip setup
+          </button>
+        ) : null}
       </header>
 
       <main className="flex flex-1 items-center justify-center px-10">
         <div className="w-full max-w-md">
-          {step === "welcome" && <WelcomeStep />}
+          {step === "welcome" &&
+            (installReady ? (
+              <WelcomeStep />
+            ) : (
+              <InstallStep installStatus={installStatus} />
+            ))}
           {step === "keys" && (
             <KeysStep
               keysOk={keysOk}
@@ -149,7 +176,9 @@ export default function Setup({ onComplete }: { onComplete: () => void }) {
               }}
             />
           )}
-          {step === "permissions" && <PermissionsStep perms={perms} />}
+          {step === "permissions" && (
+            <PermissionsStep perms={perms} fnReady={fnDefaultReady} />
+          )}
           {step === "done" && <DoneStep />}
         </div>
       </main>
@@ -213,6 +242,49 @@ function WelcomeStep() {
       <p className="text-xs text-muted-foreground">
         This setup will take less than a minute.
       </p>
+    </div>
+  );
+}
+
+function InstallStep({ installStatus }: { installStatus: InstallationStatus | null }) {
+  const [busy, setBusy] = useState(false);
+
+  const onMove = async () => {
+    setBusy(true);
+    try {
+      await tauri.moveToApplications();
+    } catch (e) {
+      toast.error(`Couldn't move app: ${e}`);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5 text-center">
+      <div className="mx-auto flex size-20 items-center justify-center rounded-3xl bg-foreground/10">
+        <FolderUp className="size-9" />
+      </div>
+      <div className="space-y-2">
+        <h1 className="text-2xl font-semibold tracking-tight">Install the app first</h1>
+        <p className="text-sm text-muted-foreground">
+          Move wysprflow into Applications before granting permissions. That keeps Accessibility
+          and Input Monitoring attached to a stable app path across relaunches.
+        </p>
+      </div>
+      {installStatus ? (
+        <div className="rounded-md border border-border/60 bg-card/40 p-3 text-left">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+            Current app location
+          </p>
+          <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
+            {installStatus.bundlePath}
+          </p>
+        </div>
+      ) : null}
+      <Button onClick={onMove} disabled={busy} className="w-full">
+        {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FolderUp className="size-3.5" />}
+        Move to Applications and relaunch
+      </Button>
     </div>
   );
 }
@@ -421,7 +493,13 @@ function KeyRow({
   );
 }
 
-function PermissionsStep({ perms }: { perms: PermissionStatus | null }) {
+function PermissionsStep({
+  perms,
+  fnReady,
+}: {
+  perms: PermissionStatus | null;
+  fnReady: boolean;
+}) {
   return (
     <div className="space-y-5">
       <div className="space-y-2 text-center">
@@ -441,9 +519,7 @@ function PermissionsStep({ perms }: { perms: PermissionStatus | null }) {
           label="Microphone"
           hint="Required to capture audio for transcription."
           state={perms?.microphone ?? "notDetermined"}
-          onGrant={async () => {
-            await tauri.requestMicrophone();
-          }}
+          request={() => tauri.requestMicrophone().then(() => undefined)}
           openSettings={() => tauri.openMicrophoneSettings()}
         />
         <PermissionRow
@@ -451,17 +527,26 @@ function PermissionsStep({ perms }: { perms: PermissionStatus | null }) {
           label="Accessibility"
           hint="Required to inject text into other apps via Cmd+V."
           state={perms?.accessibility ?? "notDetermined"}
+          request={() => tauri.requestAccessibility().then(() => undefined)}
+          preferRequest
           openSettings={() => tauri.openAccessibilitySettings()}
         />
         <PermissionRow
           icon={Sparkles}
           label="Input Monitoring"
-          hint="Required for the Fn-key hotkey. Optional — Cmd+Shift+Space works without it."
+          hint="Required for Fn-key dictation. Grant it, then keep this app installed in Applications so macOS remembers it."
           state={perms?.inputMonitoring ?? "notDetermined"}
-          optional
           openSettings={() => tauri.openInputMonitoringSettings()}
         />
       </div>
+
+      {!fnReady ? (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-left text-xs text-amber-100">
+          Fn-key dictation is still unavailable. After enabling Input Monitoring, wait a moment
+          here for the status to flip green. If it does not, quit and reopen the app once from
+          Applications.
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -472,7 +557,8 @@ function PermissionRow({
   hint,
   state,
   optional = false,
-  onGrant,
+  request,
+  preferRequest = false,
   openSettings,
 }: {
   icon: React.ComponentType<{ className?: string }>;
@@ -480,7 +566,8 @@ function PermissionRow({
   hint: string;
   state: "granted" | "denied" | "notDetermined";
   optional?: boolean;
-  onGrant?: () => Promise<void>;
+  request?: () => Promise<void>;
+  preferRequest?: boolean;
   openSettings: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -488,8 +575,8 @@ function PermissionRow({
   const handleClick = async () => {
     setBusy(true);
     try {
-      if (onGrant && state === "notDetermined") {
-        await onGrant();
+      if (request && (preferRequest || state === "notDetermined")) {
+        await request();
       } else {
         await openSettings();
       }
@@ -534,17 +621,16 @@ function DoneStep() {
       <div className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">You're all set</h1>
         <p className="text-sm text-muted-foreground">
-          Hold <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">Fn</kbd> (or
-          your configured shortcut) anywhere on your Mac and start talking. Your cleaned
-          transcript pastes at the cursor when you release.
+          Hold <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">Fn</kbd>{" "}
+          anywhere on your Mac and start talking. If Fn is blocked by system settings or Input
+          Monitoring, use your configured shortcut instead.
         </p>
       </div>
       <div className="rounded-md border border-border/60 bg-card/40 p-3 text-left">
-        <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
-          Tip if Fn opens Emoji
-        </p>
+        <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Fn key note</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          System Settings → Keyboard → "Press Fn key to" → set to <em>Do Nothing</em>.
+          For Fn-key dictation to work reliably, grant Input Monitoring and set macOS Globe/Fn
+          behavior so the key does not open Emoji or system shortcuts first.
         </p>
       </div>
     </div>

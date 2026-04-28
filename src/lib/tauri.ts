@@ -64,6 +64,12 @@ export interface PermissionStatus {
   inputMonitoring: PermissionState;
 }
 
+export interface InstallationStatus {
+  bundlePath: string;
+  inApplications: boolean;
+  isTranslocated: boolean;
+}
+
 export interface DictEntry {
   id: number;
   word: string;
@@ -131,11 +137,20 @@ export const tauri = {
   async checkPermissions(): Promise<PermissionStatus> {
     return invoke("check_permissions");
   },
+  async getInstallationStatus(): Promise<InstallationStatus> {
+    return invoke("get_installation_status");
+  },
+  async moveToApplications(): Promise<void> {
+    return invoke("move_to_applications");
+  },
   async requestMicrophone(): Promise<boolean> {
     return invoke("request_microphone");
   },
   async openAccessibilitySettings(): Promise<void> {
     return invoke("open_accessibility_settings");
+  },
+  async requestAccessibility(): Promise<PermissionStatus> {
+    return invoke("request_accessibility");
   },
   async openInputMonitoringSettings(): Promise<void> {
     return invoke("open_input_monitoring_settings");

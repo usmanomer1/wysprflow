@@ -60,6 +60,14 @@ pub struct ValidateResult {
     pub detail: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallationStatus {
+    pub bundle_path: String,
+    pub in_applications: bool,
+    pub is_translocated: bool,
+}
+
 #[tauri::command]
 pub async fn validate_api_key(provider: String) -> Result<ValidateResult, String> {
     let key = keychain::get(&provider).map_err(|e| e.to_string())?;
@@ -115,7 +123,8 @@ pub struct PermissionStatus {
 }
 
 #[tauri::command]
-pub fn check_permissions() -> PermissionStatus {
+pub fn check_permissions(app: AppHandle) -> PermissionStatus {
+    let _ = crate::hotkey::fn_key::install(app);
     PermissionStatus {
         microphone: permissions::microphone(),
         accessibility: permissions::accessibility(),
@@ -124,9 +133,100 @@ pub fn check_permissions() -> PermissionStatus {
 }
 
 #[tauri::command]
+pub fn get_installation_status() -> InstallationStatus {
+    let exe = std::env::current_exe().unwrap_or_default();
+    let mut bundle_path = exe.clone();
+
+    for ancestor in exe.ancestors() {
+        if ancestor.extension().and_then(|ext| ext.to_str()) == Some("app") {
+            bundle_path = ancestor.to_path_buf();
+            break;
+        }
+    }
+
+    let bundle_display = bundle_path.to_string_lossy().into_owned();
+    let home_applications = std::env::var("HOME")
+        .ok()
+        .map(|home| format!("{home}/Applications/"))
+        .unwrap_or_default();
+
+    InstallationStatus {
+        in_applications: bundle_display.starts_with("/Applications/")
+            || (!home_applications.is_empty() && bundle_display.starts_with(&home_applications)),
+        is_translocated: bundle_display.contains("/AppTranslocation/"),
+        bundle_path: bundle_display,
+    }
+}
+
+#[tauri::command]
+pub fn move_to_applications(app: AppHandle) -> Result<(), String> {
+    let status = get_installation_status();
+    if status.in_applications && !status.is_translocated {
+        return Ok(());
+    }
+
+    let source = std::path::PathBuf::from(&status.bundle_path);
+    if source.extension().and_then(|ext| ext.to_str()) != Some("app") {
+        return Err("Could not locate running app bundle".into());
+    }
+
+    let product_name = "wysprflow.app";
+    let mut targets = vec![std::path::PathBuf::from("/Applications").join(product_name)];
+    if let Ok(home) = std::env::var("HOME") {
+        targets.push(std::path::PathBuf::from(home).join("Applications").join(product_name));
+    }
+
+    let mut last_error = None;
+    for target in targets {
+        if let Some(parent) = target.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                last_error = Some(e.to_string());
+                continue;
+            }
+        }
+
+        if target != source && target.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&target) {
+                last_error = Some(e.to_string());
+                continue;
+            }
+        }
+
+        let status = std::process::Command::new("/usr/bin/ditto")
+            .arg(&source)
+            .arg(&target)
+            .status()
+            .map_err(|e| e.to_string())?;
+
+        if !status.success() {
+            last_error = Some(format!("ditto failed for {}", target.display()));
+            continue;
+        }
+
+        std::process::Command::new("open")
+            .arg("-n")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+
+        app.exit(0);
+        return Ok(());
+    }
+
+    Err(last_error.unwrap_or_else(|| "Couldn't move app into Applications".into()))
+}
+
+#[tauri::command]
 pub async fn request_microphone() -> bool {
-    use cpal::traits::HostTrait;
-    cpal::default_host().default_input_device().is_some()
+    let (audio_tx, _audio_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+    match crate::audio::capture::start(None, audio_tx) {
+        Ok(handle) => {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            drop(handle);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 #[tauri::command]
@@ -139,6 +239,16 @@ pub fn open_accessibility_settings() -> Result<(), String> {
 pub fn open_input_monitoring_settings() -> Result<(), String> {
     permissions::open_input_monitoring_settings();
     Ok(())
+}
+
+#[tauri::command]
+pub fn request_accessibility() -> PermissionStatus {
+    let accessibility = permissions::request_accessibility();
+    PermissionStatus {
+        microphone: permissions::microphone(),
+        accessibility,
+        input_monitoring: permissions::input_monitoring(),
+    }
 }
 
 #[tauri::command]

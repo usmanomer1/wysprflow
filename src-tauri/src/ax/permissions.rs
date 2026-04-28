@@ -29,7 +29,7 @@ pub fn microphone() -> PermissionState {
 pub fn accessibility() -> PermissionState {
     #[cfg(target_os = "macos")]
     {
-        if unsafe { ax_is_process_trusted() } {
+        if unsafe { ax_is_process_trusted(false) } {
             PermissionState::Granted
         } else {
             PermissionState::Denied
@@ -42,21 +42,53 @@ pub fn accessibility() -> PermissionState {
 }
 
 pub fn input_monitoring() -> PermissionState {
-    // Best heuristic without IOHIDCheckAccess bridging: if AX is granted, the user
-    // has done the privileged-grant dance and Input Monitoring is usually granted
-    // alongside. The Fn-key listener will log if it actually fails.
-    accessibility()
+    if crate::hotkey::fn_key::is_available() {
+        PermissionState::Granted
+    } else {
+        PermissionState::Denied
+    }
 }
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrustedWithOptions(
+        options: core_foundation::dictionary::CFDictionaryRef,
+    ) -> bool;
 }
 
 #[cfg(target_os = "macos")]
-unsafe fn ax_is_process_trusted() -> bool {
-    AXIsProcessTrusted()
+unsafe fn ax_is_process_trusted(prompt: bool) -> bool {
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+
+    if prompt {
+        let options = CFDictionary::from_CFType_pairs(&[(
+            CFString::new("AXTrustedCheckOptionPrompt"),
+            CFBoolean::true_value(),
+        )]);
+        AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef())
+    } else {
+        AXIsProcessTrusted()
+    }
+}
+
+pub fn request_accessibility() -> PermissionState {
+    #[cfg(target_os = "macos")]
+    {
+        if unsafe { ax_is_process_trusted(true) } {
+            PermissionState::Granted
+        } else {
+            PermissionState::Denied
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        PermissionState::Granted
+    }
 }
 
 pub fn open_accessibility_settings() {

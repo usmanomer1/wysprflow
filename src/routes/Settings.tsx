@@ -35,6 +35,7 @@ import {
 import Setup from "@/routes/Setup";
 import { cn } from "@/lib/utils";
 import logoMark from "@/assets/wysprflow-logo.png";
+import { tauri, type InstallationStatus, type PermissionStatus } from "@/lib/tauri";
 
 type SettingsTab = "general" | "dictionary" | "snippets" | "history" | "prompts" | "about";
 
@@ -58,12 +59,39 @@ export default function Settings() {
   const loading = useApp((s) => s.loading);
   const setConfig = useApp((s) => s.setConfig);
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+  const [permissions, setPermissions] = useState<PermissionStatus | null>(null);
+  const [installStatus, setInstallStatus] = useState<InstallationStatus | null>(null);
 
   useEffect(() => {
     load().catch(() => {
       /* backend may not be ready during cold start */
     });
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const [nextPermissions, nextInstall] = await Promise.all([
+          tauri.checkPermissions(),
+          tauri.getInstallationStatus(),
+        ]);
+        if (!cancelled) {
+          setPermissions(nextPermissions);
+          setInstallStatus(nextInstall);
+        }
+      } catch {
+        /* backend may still be starting */
+      }
+    };
+
+    refresh();
+    const timer = window.setInterval(refresh, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   // Gate on first-run setup. Once user clicks "Get started" we flip the flag and
   // load() refreshes the store, dropping us into the regular settings view.
@@ -73,7 +101,19 @@ export default function Settings() {
       (config.llmProvider === "openrouter" && !keys.openrouter.hasKey) ||
       (config.llmProvider === "anthropic" && !keys.anthropic.hasKey));
 
-  if (!loading && config && (!config.setupCompleted || missingRequiredKeys)) {
+  const installReady =
+    !installStatus || (installStatus.inApplications && !installStatus.isTranslocated);
+  const permissionsReady =
+    !permissions ||
+    (permissions.microphone === "granted" &&
+      permissions.accessibility === "granted" &&
+      permissions.inputMonitoring === "granted");
+
+  if (
+    !loading &&
+    config &&
+    (!config.setupCompleted || missingRequiredKeys || !installReady || !permissionsReady)
+  ) {
     return (
       <Setup
         onComplete={async () => {

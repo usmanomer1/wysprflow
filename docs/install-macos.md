@@ -49,7 +49,7 @@ pnpm tauri:build:dmg
 
 1. Open the DMG.
 2. Drag `wysprflow.app` into `Applications`.
-3. Launch `wysprflow`.
+3. Launch `wysprflow` from `Applications`, not from the DMG window.
 
 If you ship a `.zip` instead:
 
@@ -62,10 +62,11 @@ If you ship a `.zip` instead:
 
 You will be guided through:
 
-1. provider keys
-2. microphone permission
-3. accessibility permission
-4. optional input monitoring permission for the `Fn` hotkey
+1. confirming the app is running from `Applications`
+2. provider keys
+3. microphone permission
+4. accessibility permission
+5. input monitoring permission for the `Fn` hotkey
 
 ## Required keys
 
@@ -78,9 +79,11 @@ Provider details: [providers.md](providers.md)
 
 1. Open `TextEdit` or `Notes`
 2. Click into a normal text field
-3. Hold the configured hotkey
+3. Hold `Fn`
 4. Speak a short sentence
 5. Release the hotkey and wait for paste
+
+If your Mac uses `Fn` for Emoji or Globe shortcuts, change that in `System Settings -> Keyboard`, or use the fallback shortcut shown in `wysprflow` settings.
 
 ## macOS warnings
 

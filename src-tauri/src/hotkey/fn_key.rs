@@ -13,8 +13,28 @@ use anyhow::Result;
 use tauri::AppHandle;
 
 #[cfg(target_os = "macos")]
+static FN_AVAILABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+static FN_THREAD_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+pub fn is_available() -> bool {
+    FN_AVAILABLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_available() -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
 pub fn install(app: AppHandle) -> Result<()> {
     use std::thread;
+    if FN_AVAILABLE.load(std::sync::atomic::Ordering::Relaxed)
+        || FN_THREAD_ACTIVE.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        return Ok(());
+    }
     thread::Builder::new()
         .name("wysprflow-fnkey".into())
         .spawn(move || {
@@ -87,6 +107,8 @@ fn run_tap(app: AppHandle) {
     ) {
         Ok(t) => t,
         Err(_) => {
+            FN_AVAILABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+            FN_THREAD_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
             warn!("CGEventTap creation failed — Input Monitoring permission likely not granted. Fn-key support disabled; global-shortcut combos still work.");
             return;
         }
@@ -95,6 +117,8 @@ fn run_tap(app: AppHandle) {
     let source = match tap.mach_port.create_runloop_source(0) {
         Ok(s) => s,
         Err(_) => {
+            FN_AVAILABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+            FN_THREAD_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
             warn!("create_runloop_source failed");
             return;
         }
@@ -108,10 +132,13 @@ fn run_tap(app: AppHandle) {
         );
     }
     tap.enable();
+    FN_AVAILABLE.store(true, Ordering::Relaxed);
 
     info!("fn-key tap installed");
 
     unsafe {
         CFRunLoopRun();
     }
+    FN_AVAILABLE.store(false, Ordering::Relaxed);
+    FN_THREAD_ACTIVE.store(false, Ordering::Relaxed);
 }
