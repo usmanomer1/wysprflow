@@ -1,0 +1,73 @@
+[package]
+name = "wysprflow"
+version = "0.1.0"
+description = "Premium voice dictation for macOS"
+authors = ["Usman Okayani"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "wysprflow_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-os = "2"
+tauri-plugin-shell = "2"
+
+# Audio capture + processing (used in Phase 1b — declared now so the dep graph stabilizes)
+cpal = "0.15"
+rubato = "0.15"
+rtrb = "0.3"
+
+# HTTP + WebSocket clients for STT/LLM providers
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
+futures-util = "0.3"
+bytes = "1"
+
+# Serialization, IDs, time
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Errors / logging
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Sync primitives
+once_cell = "1"
+parking_lot = "0.12"
+async-trait = "0.1"
+
+# Clipboard read/write + synthetic key events for paste injection
+arboard = "3"
+enigo = "0.2"
+
+# SQLite for dictionary, snippets, and history.
+# `bundled` ships SQLite source so users don't need a system lib.
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+
+# WebSocket request building (for setting Authorization header on Deepgram connect)
+http = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "2"
+# Used directly for CGEventTap (Fn-key) and AXIsProcessTrusted permission check.
+core-graphics = "0.23"
+core-foundation = "0.9"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

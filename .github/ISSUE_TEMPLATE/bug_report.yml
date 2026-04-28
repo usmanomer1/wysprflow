@@ -1,0 +1,68 @@
+name: Bug report
+description: Report a reproducible bug in wysprflow
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please include the exact behavior, your environment, and any relevant run-log output.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: macOS 14.7
+    validations:
+      required: true
+  - type: dropdown
+    id: build_type
+    attributes:
+      label: Build type
+      options:
+        - tauri dev
+        - packaged app
+    validations:
+      required: true
+  - type: textarea
+    id: providers
+    attributes:
+      label: Provider setup
+      description: Note which STT and cleanup providers were configured.
+      placeholder: Deepgram + OpenRouter
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open TextEdit
+        2. Hold hotkey
+        3. Speak...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      render: shell
