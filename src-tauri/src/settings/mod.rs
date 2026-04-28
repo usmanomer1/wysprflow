@@ -81,7 +81,7 @@ pub fn initialize(app: &AppHandle) -> Result<()> {
     let dir = app.path().app_config_dir().context("app_config_dir")?;
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("config.json");
-    let config: DictationConfig = if path.exists() {
+    let mut config: DictationConfig = if path.exists() {
         serde_json::from_str(&std::fs::read_to_string(&path)?).unwrap_or_default()
     } else {
         let cfg = DictationConfig::default();
@@ -89,12 +89,21 @@ pub fn initialize(app: &AppHandle) -> Result<()> {
         cfg
     };
     STORE
-        .set(RwLock::new(config))
+        .set(RwLock::new(config.clone()))
         .map_err(|_| anyhow::anyhow!("settings already initialized"))?;
     CONFIG_PATH
         .set(path)
         .map_err(|_| anyhow::anyhow!("config path already set"))?;
     keychain::initialize_validation_store(app)?;
+    if config.setup_completed && !setup_requirements_satisfied(&config)? {
+        config.setup_completed = false;
+        if let Some(store) = STORE.get() {
+            *store.write().unwrap() = config.clone();
+        }
+        if let Some(path) = CONFIG_PATH.get() {
+            std::fs::write(path, serde_json::to_string_pretty(&config)?)?;
+        }
+    }
     Ok(())
 }
 
@@ -131,4 +140,19 @@ fn merge(base: &serde_json::Value, patch: &serde_json::Value) -> serde_json::Val
         }
         (_, p) => p.clone(),
     }
+}
+
+fn setup_requirements_satisfied(cfg: &DictationConfig) -> Result<bool> {
+    let deepgram_ready = keychain::status("deepgram")?.has_key;
+    if !deepgram_ready {
+        return Ok(false);
+    }
+
+    let cleanup_ready = match cfg.llm_provider.as_str() {
+        "openrouter" => keychain::status("openrouter")?.has_key,
+        "anthropic" => keychain::status("anthropic")?.has_key,
+        _ => true,
+    };
+
+    Ok(cleanup_ready)
 }

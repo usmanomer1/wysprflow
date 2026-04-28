@@ -54,6 +54,8 @@ const tabs: ReadonlyArray<{
 export default function Settings() {
   const load = useApp((s) => s.load);
   const config = useApp((s) => s.config);
+  const keys = useApp((s) => s.keys);
+  const loading = useApp((s) => s.loading);
   const setConfig = useApp((s) => s.setConfig);
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
 
@@ -65,7 +67,13 @@ export default function Settings() {
 
   // Gate on first-run setup. Once user clicks "Get started" we flip the flag and
   // load() refreshes the store, dropping us into the regular settings view.
-  if (config && !config.setupCompleted) {
+  const missingRequiredKeys =
+    !!config &&
+    (!keys.deepgram.hasKey ||
+      (config.llmProvider === "openrouter" && !keys.openrouter.hasKey) ||
+      (config.llmProvider === "anthropic" && !keys.anthropic.hasKey));
+
+  if (!loading && config && (!config.setupCompleted || missingRequiredKeys)) {
     return (
       <Setup
         onComplete={async () => {

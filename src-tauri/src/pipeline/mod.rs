@@ -129,6 +129,7 @@ async fn run_session(app: AppHandle, mut cancel: oneshot::Receiver<()>, session_
             warn!("pipeline[{session_id}]: Deepgram key missing");
             let _ = hud::emit_state(&app, HudState::error("Add Deepgram key"));
             let _ = hud::show(&app);
+            record_error(&app, "Missing Deepgram key", started_at);
             tokio::time::sleep(Duration::from_secs(2)).await;
             let _ = hud::hide(&app);
             return;
