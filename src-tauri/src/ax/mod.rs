@@ -202,63 +202,117 @@ fn supports_chat_file_tagging(source_app: Option<&str>) -> bool {
 
 fn split_inject_chunks(text: &str) -> Vec<InjectChunk> {
     let mut chunks = Vec::new();
-    let mut cursor = 0usize;
 
-    while let Some(relative_at) = text[cursor..].find('@') {
-        let at_index = cursor + relative_at;
-        if let Some((query, end_index)) = parse_file_tag_query(text, at_index) {
-            if at_index > cursor {
-                chunks.push(InjectChunk::Text(text[cursor..at_index].to_string()));
-            }
-            chunks.push(InjectChunk::FileTag(query.to_string()));
-            cursor = end_index;
-        } else {
-            let next_index = at_index + '@'.len_utf8();
-            if next_index > cursor {
-                chunks.push(InjectChunk::Text(text[cursor..next_index].to_string()));
-                cursor = next_index;
-            } else {
-                break;
-            }
-        }
+    for segment in text.split_inclusive(char::is_whitespace) {
+        split_segment_into_chunks(segment, &mut chunks);
     }
 
-    if cursor < text.len() {
-        chunks.push(InjectChunk::Text(text[cursor..].to_string()));
+    if !text.chars().last().map(char::is_whitespace).unwrap_or(true) {
+        let consumed = text
+            .split_inclusive(char::is_whitespace)
+            .map(str::len)
+            .sum::<usize>();
+        if consumed < text.len() {
+            split_segment_into_chunks(&text[consumed..], &mut chunks);
+        }
     }
 
     chunks
 }
 
-fn parse_file_tag_query(text: &str, at_index: usize) -> Option<(&str, usize)> {
-    let query_start = at_index + '@'.len_utf8();
-    if query_start >= text.len() {
+fn split_segment_into_chunks(segment: &str, chunks: &mut Vec<InjectChunk>) {
+    if segment.is_empty() {
+        return;
+    }
+
+    let trailing_ws_len = segment
+        .chars()
+        .rev()
+        .take_while(|ch| ch.is_whitespace())
+        .map(char::len_utf8)
+        .sum::<usize>();
+    let (body, trailing_ws) = if trailing_ws_len == 0 {
+        (segment, "")
+    } else {
+        let split_at = segment.len() - trailing_ws_len;
+        (&segment[..split_at], &segment[split_at..])
+    };
+
+    if body.is_empty() {
+        push_text_chunk(chunks, trailing_ws.to_string());
+        return;
+    }
+
+    let leading_len = body
+        .chars()
+        .take_while(|ch| !is_file_tag_leading_char(*ch))
+        .map(char::len_utf8)
+        .sum::<usize>();
+    let trailing_len = body
+        .chars()
+        .rev()
+        .take_while(|ch| !is_file_tag_trailing_char(*ch))
+        .map(char::len_utf8)
+        .sum::<usize>();
+    let core_end = body.len().saturating_sub(trailing_len);
+
+    let leading = &body[..leading_len];
+    let core = &body[leading_len..core_end];
+    let trailing = &body[core_end..];
+
+    if let Some(query) = parse_file_tag_query(core) {
+        push_text_chunk(chunks, leading.to_string());
+        chunks.push(InjectChunk::FileTag(query.to_string()));
+        push_text_chunk(chunks, format!("{}{}", trailing, trailing_ws));
+        return;
+    }
+
+    push_text_chunk(chunks, segment.to_string());
+}
+
+fn parse_file_tag_query(core: &str) -> Option<&str> {
+    if core.is_empty() {
         return None;
     }
 
-    let mut query_end = query_start;
-    for (offset, ch) in text[query_start..].char_indices() {
-        if is_file_tag_char(ch) {
-            query_end = query_start + offset + ch.len_utf8();
-        } else {
-            break;
-        }
-    }
-
-    if query_end == query_start {
+    let query = core.strip_prefix('@').unwrap_or(core);
+    if query.is_empty() || query.contains("://") || query.contains('@') {
         return None;
     }
 
-    let query = &text[query_start..query_end];
+    if !query.chars().all(is_file_tag_char) {
+        return None;
+    }
+
     if !has_known_file_extension(query) {
         return None;
     }
 
-    Some((query, query_end))
+    Some(query)
 }
 
 fn is_file_tag_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/')
+}
+
+fn is_file_tag_leading_char(ch: char) -> bool {
+    is_file_tag_char(ch) || ch == '@'
+}
+
+fn is_file_tag_trailing_char(ch: char) -> bool {
+    is_file_tag_char(ch)
+}
+
+fn push_text_chunk(chunks: &mut Vec<InjectChunk>, text: String) {
+    if text.is_empty() {
+        return;
+    }
+
+    if let Some(InjectChunk::Text(existing)) = chunks.last_mut() {
+        existing.push_str(&text);
+    } else {
+        chunks.push(InjectChunk::Text(text));
+    }
 }
 
 fn has_known_file_extension(query: &str) -> bool {
@@ -287,5 +341,25 @@ mod tests {
         assert!(matches!(&chunks[2], InjectChunk::Text(text) if text == " and "));
         assert!(matches!(&chunks[3], InjectChunk::FileTag(tag) if tag == "src/auth.tsx"));
         assert!(matches!(&chunks[4], InjectChunk::Text(text) if text == " before shipping."));
+    }
+
+    #[test]
+    fn splits_bare_filenames_into_actionable_chunks() {
+        let chunks = split_inject_chunks("Check users.ts and src/auth.tsx before shipping.");
+        assert_eq!(chunks.len(), 5);
+        assert!(matches!(&chunks[0], InjectChunk::Text(text) if text == "Check "));
+        assert!(matches!(&chunks[1], InjectChunk::FileTag(tag) if tag == "users.ts"));
+        assert!(matches!(&chunks[2], InjectChunk::Text(text) if text == " and "));
+        assert!(matches!(&chunks[3], InjectChunk::FileTag(tag) if tag == "src/auth.tsx"));
+        assert!(matches!(&chunks[4], InjectChunk::Text(text) if text == " before shipping."));
+    }
+
+    #[test]
+    fn leaves_emails_alone() {
+        let chunks = split_inject_chunks("Email us at hello@example.com please.");
+        assert_eq!(chunks.len(), 1);
+        assert!(
+            matches!(&chunks[0], InjectChunk::Text(text) if text == "Email us at hello@example.com please.")
+        );
     }
 }
