@@ -102,9 +102,13 @@ async fn inject_chunks(app: &AppHandle, chunks: &[InjectChunk]) -> Result<()> {
             }
             InjectChunk::FileTag(query) => {
                 debug!("inject: committing file tag {:?}", query);
-                paste_text_fragment(app, "@").await?;
+                type_text_on_main_thread(app.clone(), "@")
+                    .await
+                    .context("type file-tag trigger")?;
                 tokio::time::sleep(Duration::from_millis(CLIPBOARD_SETTLE_DELAY_MS)).await;
-                paste_text_fragment(app, query).await?;
+                type_text_on_main_thread(app.clone(), query)
+                    .await
+                    .context("type file-tag query")?;
                 tokio::time::sleep(Duration::from_millis(MENTION_MENU_DELAY_MS)).await;
                 tokio::time::timeout(
                     Duration::from_secs(2),
@@ -157,6 +161,20 @@ async fn paste_keystroke_on_main_thread(app: AppHandle) -> Result<()> {
         .map_err(anyhow::Error::msg)
 }
 
+async fn type_text_on_main_thread(app: AppHandle, text: &str) -> Result<()> {
+    let text = text.to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel::<std::result::Result<(), String>>();
+    app.run_on_main_thread(move || {
+        let result = type_text(&text).map_err(|e| e.to_string());
+        let _ = tx.send(result);
+    })
+    .context("schedule text entry on main thread")?;
+
+    rx.await
+        .context("main-thread text callback dropped")?
+        .map_err(anyhow::Error::msg)
+}
+
 async fn key_click_on_main_thread(app: AppHandle, key: Key) -> Result<()> {
     let (tx, rx) = tokio::sync::oneshot::channel::<std::result::Result<(), String>>();
     app.run_on_main_thread(move || {
@@ -192,6 +210,12 @@ fn paste_keystroke() -> Result<()> {
 fn key_click(key: Key) -> Result<()> {
     let mut enigo = Enigo::new(&Settings::default()).context("enigo init")?;
     enigo.key(key, Direction::Click).context("click key")?;
+    Ok(())
+}
+
+fn type_text(text: &str) -> Result<()> {
+    let mut enigo = Enigo::new(&Settings::default()).context("enigo init")?;
+    enigo.text(text).context("type text")?;
     Ok(())
 }
 
