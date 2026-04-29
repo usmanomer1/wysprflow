@@ -49,4 +49,5 @@ Thumbs.db
 *.pkg
 *.app
 release/
+release-assets/
 tmp/

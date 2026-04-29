@@ -14,7 +14,7 @@
     "tauri:build:app": "tauri build --bundles app",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "tauri:build:dmg": "tauri build --bundles dmg",
+    "tauri:build:dmg": "pnpm tauri:build:app && ./scripts/package-macos-release.sh",
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
