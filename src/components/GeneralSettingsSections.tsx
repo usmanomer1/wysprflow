@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { CheckCircle2, Loader2, Mic, Shield } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, Mic, Shield } from "lucide-react";
 import { toast } from "sonner";
 
 import { useApp } from "@/lib/store";
@@ -91,7 +91,7 @@ export function ProviderRoutingSection() {
 
         <Field
           label="Cleanup intensity"
-          hint="`None` skips stylistic cleanup but can still run translation or custom instructions."
+          hint="`None` keeps the wording literal, but email layout, bullet lists, and spoken file tags can still be normalized when cleanup is enabled."
         >
           <Select
             value={config.autoCleanup}
@@ -127,6 +127,22 @@ export function ProviderRoutingSection() {
           placeholder={llmProvider === "openrouter" ? "anthropic/claude-haiku-4.5" : "claude-haiku-4-5"}
         />
       </Field>
+
+      {llmProvider === "off" ? (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <div className="space-y-1">
+              <div className="font-medium text-amber-50">Cleanup-dependent formatting is off</div>
+              <p className="text-xs leading-5 text-amber-100/90">
+                Raw dictation still works. Email formatting, bullet formatting, and spoken
+                `@file.tsx` normalization for coding prompts are disabled until you re-enable a
+                cleanup provider.
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -338,6 +354,12 @@ export function BehaviorSettingsSection() {
         hint="Uses the system alert sounds when dictation begins and ends."
         checked={config.playSounds}
         onCheckedChange={(checked) => setConfig({ playSounds: checked })}
+      />
+      <ToggleRow
+        label="File tagging in Cursor / Windsurf chat"
+        hint="When pasted text includes `@file.ts` style references, try to commit the IDE mention dropdown automatically with Enter."
+        checked={config.ideFileTagging}
+        onCheckedChange={(checked) => setConfig({ ideFileTagging: checked })}
       />
     </div>
   );

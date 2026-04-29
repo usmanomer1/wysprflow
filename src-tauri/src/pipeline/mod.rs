@@ -17,6 +17,7 @@ use tokio::sync::oneshot;
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
+use crate::app_context;
 use crate::audio::capture::{self, f32_to_pcm16_le};
 use crate::ax;
 use crate::db::Db;
@@ -124,6 +125,10 @@ impl Pipeline {
 async fn run_session(app: AppHandle, mut cancel: oneshot::Receiver<()>, session_id: u64) {
     let cfg = settings::get();
     let started_at = Instant::now();
+    let source_app = app_context::frontmost_app_name();
+    if let Some(name) = &source_app {
+        info!("pipeline[{session_id}]: source app = {}", name);
+    }
 
     let dg_key = match keychain::get("deepgram") {
         Ok(Some(k)) => k,
@@ -131,7 +136,12 @@ async fn run_session(app: AppHandle, mut cancel: oneshot::Receiver<()>, session_
             warn!("pipeline[{session_id}]: Deepgram key missing");
             let _ = hud::emit_state(&app, HudState::error("Add Deepgram key"));
             let _ = hud::show(&app);
-            record_error(&app, "Missing Deepgram key", started_at);
+            record_error(
+                &app,
+                "Missing Deepgram key",
+                started_at,
+                source_app.as_deref(),
+            );
             tokio::time::sleep(Duration::from_secs(2)).await;
             let _ = hud::hide(&app);
             return;
@@ -154,7 +164,7 @@ async fn run_session(app: AppHandle, mut cancel: oneshot::Receiver<()>, session_
             let _ = hud::emit_state(&app, HudState::error("Mic unavailable"));
             tokio::time::sleep(Duration::from_secs(2)).await;
             let _ = hud::hide(&app);
-            record_error(&app, "Mic unavailable", started_at);
+            record_error(&app, "Mic unavailable", started_at, source_app.as_deref());
             return;
         }
     };
@@ -188,7 +198,12 @@ async fn run_session(app: AppHandle, mut cancel: oneshot::Receiver<()>, session_
             tokio::time::sleep(Duration::from_secs(2)).await;
             let _ = hud::hide(&app);
             drop(capture);
-            record_error(&app, &format!("Deepgram: {}", e), started_at);
+            record_error(
+                &app,
+                &format!("Deepgram: {}", e),
+                started_at,
+                source_app.as_deref(),
+            );
             return;
         }
     };
@@ -297,10 +312,17 @@ async fn run_session(app: AppHandle, mut cancel: oneshot::Receiver<()>, session_
         .try_state::<Db>()
         .and_then(|db| dictionary::list_words(&db).ok())
         .unwrap_or_default();
+    let cleanup_context = crate::llm::infer_cleanup_context(&raw_trimmed, source_app.as_deref());
 
     let _ = hud::emit_state(&app, HudState::processing_with_message("Cleaning"));
-    info!("pipeline[{session_id}]: cleanup starting");
-    let cleaned = match run_cleanup(&cfg, &raw_trimmed, &dictionary_words).await {
+    info!(
+        "pipeline[{session_id}]: cleanup starting surface={:?} email={} bullets={} file_tags={}",
+        cleanup_context.surface,
+        cleanup_context.format_as_email,
+        cleanup_context.format_as_bullets,
+        cleanup_context.format_spoken_file_tags
+    );
+    let cleaned = match run_cleanup(&cfg, &raw_trimmed, &dictionary_words, &cleanup_context).await {
         Ok(t) => t,
         Err(e) => {
             warn!(
@@ -315,7 +337,14 @@ async fn run_session(app: AppHandle, mut cancel: oneshot::Receiver<()>, session_
     if cleaned.is_empty() {
         let _ = hud::emit_state(&app, HudState::idle());
         let _ = hud::hide(&app);
-        record_session(&app, &raw_trimmed, "", started_at, None);
+        record_session(
+            &app,
+            &raw_trimmed,
+            "",
+            started_at,
+            None,
+            source_app.as_deref(),
+        );
         return;
     }
 
@@ -338,7 +367,15 @@ async fn run_session(app: AppHandle, mut cancel: oneshot::Receiver<()>, session_
     // ---- Inject ---------------------------------------------------------------
     let _ = hud::emit_state(&app, HudState::processing_with_message("Pasting"));
     info!("pipeline[{session_id}]: inject starting");
-    let inject_error = if let Err(e) = ax::inject(&app, &final_text, cfg.preserve_clipboard).await {
+    let inject_error = if let Err(e) = ax::inject(
+        &app,
+        &final_text,
+        cfg.preserve_clipboard,
+        source_app.as_deref(),
+        cfg.ide_file_tagging,
+    )
+    .await
+    {
         error!("pipeline[{session_id}]: inject failed: {}", e);
         let _ = hud::emit_state(&app, HudState::error("Couldn't paste"));
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -352,7 +389,14 @@ async fn run_session(app: AppHandle, mut cancel: oneshot::Receiver<()>, session_
     }
 
     // ---- Record into history --------------------------------------------------
-    record_session(&app, &raw_trimmed, &final_text, started_at, inject_error);
+    record_session(
+        &app,
+        &raw_trimmed,
+        &final_text,
+        started_at,
+        inject_error,
+        source_app.as_deref(),
+    );
 
     let _ = hud::emit_state(&app, HudState::idle());
     let _ = hud::hide(&app);
@@ -362,23 +406,25 @@ async fn run_cleanup(
     cfg: &DictationConfig,
     transcript: &str,
     dictionary: &[String],
+    context: &crate::llm::CleanupContext,
 ) -> Result<String> {
     let cleanup_started = Instant::now();
     match cfg.llm_provider.as_str() {
         "anthropic" => {
             info!(
-                "cleanup: provider=anthropic model={} chars={}",
+                "cleanup: provider=anthropic model={} chars={} source_app={:?}",
                 if cfg.llm_model.is_empty() {
                     "claude-haiku-4-5"
                 } else {
                     cfg.llm_model.as_str()
                 },
-                transcript.len()
+                transcript.len(),
+                context.source_app
             );
             let key = keychain::get("anthropic")?
                 .ok_or_else(|| anyhow::anyhow!("no Anthropic key in Keychain"))?;
             let out = AnthropicClient::new(key)
-                .cleanup(transcript, cfg, dictionary)
+                .cleanup(transcript, cfg, dictionary, context)
                 .await?;
             info!(
                 "cleanup: provider=anthropic done in {}ms",
@@ -388,18 +434,19 @@ async fn run_cleanup(
         }
         "openrouter" => {
             info!(
-                "cleanup: provider=openrouter model={} chars={}",
+                "cleanup: provider=openrouter model={} chars={} source_app={:?}",
                 if cfg.llm_model.is_empty() || cfg.llm_model == "claude-haiku-4-5" {
                     "anthropic/claude-haiku-4.5"
                 } else {
                     cfg.llm_model.as_str()
                 },
-                transcript.len()
+                transcript.len(),
+                context.source_app
             );
             let key = keychain::get("openrouter")?
                 .ok_or_else(|| anyhow::anyhow!("no OpenRouter key in Keychain"))?;
             let out = OpenRouterClient::new(key)
-                .cleanup(transcript, cfg, dictionary)
+                .cleanup(transcript, cfg, dictionary, context)
                 .await?;
             info!(
                 "cleanup: provider=openrouter done in {}ms",
@@ -410,7 +457,9 @@ async fn run_cleanup(
         // "off" or anything else — skip cleanup, return transcript verbatim.
         _ => {
             info!("cleanup: provider=off chars={}", transcript.len());
-            Ok(transcript.to_string())
+            Ok(crate::llm::apply_best_effort_output_transforms(
+                transcript, context,
+            ))
         }
     }
 }
@@ -421,6 +470,7 @@ fn record_session(
     cleaned: &str,
     started_at: Instant,
     error: Option<String>,
+    source_app: Option<&str>,
 ) {
     let Some(db) = app.try_state::<Db>() else {
         return;
@@ -429,7 +479,7 @@ fn record_session(
     let entry = NewEntry {
         raw: raw.to_string(),
         cleaned: cleaned.to_string(),
-        source_app: None,
+        source_app: source_app.map(ToOwned::to_owned),
         duration_ms: Some(duration_ms),
         error,
     };
@@ -438,8 +488,15 @@ fn record_session(
     }
 }
 
-fn record_error(app: &AppHandle, message: &str, started_at: Instant) {
-    record_session(app, "", "", started_at, Some(message.to_string()));
+fn record_error(app: &AppHandle, message: &str, started_at: Instant, source_app: Option<&str>) {
+    record_session(
+        app,
+        "",
+        "",
+        started_at,
+        Some(message.to_string()),
+        source_app,
+    );
 }
 
 fn append_segment(buf: &mut String, segment: &str) {

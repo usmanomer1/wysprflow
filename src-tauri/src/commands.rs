@@ -173,7 +173,11 @@ pub fn move_to_applications(app: AppHandle) -> Result<(), String> {
     let product_name = "wysprflow.app";
     let mut targets = vec![std::path::PathBuf::from("/Applications").join(product_name)];
     if let Ok(home) = std::env::var("HOME") {
-        targets.push(std::path::PathBuf::from(home).join("Applications").join(product_name));
+        targets.push(
+            std::path::PathBuf::from(home)
+                .join("Applications")
+                .join(product_name),
+        );
     }
 
     let mut last_error = None;

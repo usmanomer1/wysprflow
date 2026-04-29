@@ -156,7 +156,9 @@ fn run_tap(app: AppHandle) {
 
 #[cfg(target_os = "macos")]
 fn current_function_key_is_down() -> bool {
-    unsafe { cg_event_source_flags_state(CGEventSourceStateID::CombinedSessionState) & 0x800000 != 0 }
+    unsafe {
+        cg_event_source_flags_state(CGEventSourceStateID::CombinedSessionState) & 0x800000 != 0
+    }
 }
 
 #[cfg(target_os = "macos")]

@@ -24,6 +24,8 @@ pub struct DictationConfig {
     pub preserve_clipboard: bool,
     #[serde(default)]
     pub play_sounds: bool,
+    #[serde(default = "default_ide_file_tagging")]
+    pub ide_file_tagging: bool,
     #[serde(default = "default_translate_to")]
     pub translate_to: String,
     #[serde(default = "default_snippets_enabled")]
@@ -49,6 +51,7 @@ impl Default for DictationConfig {
             microphone_device: default_microphone_device(),
             preserve_clipboard: default_preserve_clipboard(),
             play_sounds: false,
+            ide_file_tagging: default_ide_file_tagging(),
             translate_to: default_translate_to(),
             snippets_enabled: default_snippets_enabled(),
             custom_cleanup_prompt: String::new(),
@@ -68,6 +71,10 @@ fn default_preserve_clipboard() -> bool {
 
 fn default_translate_to() -> String {
     "same".into()
+}
+
+fn default_ide_file_tagging() -> bool {
+    true
 }
 
 fn default_snippets_enabled() -> bool {

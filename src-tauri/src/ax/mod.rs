@@ -22,9 +22,26 @@ use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tracing::{debug, warn};
 
+const CLIPBOARD_SETTLE_DELAY_MS: u64 = 40;
+const CLIPBOARD_RESTORE_DELAY_MS: u64 = 180;
+const MENTION_MENU_DELAY_MS: u64 = 120;
+const MENTION_COMMIT_SETTLE_MS: u64 = 90;
+
+#[derive(Debug)]
+enum InjectChunk {
+    Text(String),
+    FileTag(String),
+}
+
 /// Paste `text` into whatever app currently has keyboard focus. Optionally saves and
 /// restores the user's clipboard around the operation.
-pub async fn inject(app: &AppHandle, text: &str, preserve_clipboard: bool) -> Result<()> {
+pub async fn inject(
+    app: &AppHandle,
+    text: &str,
+    preserve_clipboard: bool,
+    source_app: Option<&str>,
+    file_tagging_enabled: bool,
+) -> Result<()> {
     if text.is_empty() {
         return Ok(());
     }
@@ -43,12 +60,77 @@ pub async fn inject(app: &AppHandle, text: &str, preserve_clipboard: bool) -> Re
     } else {
         None
     };
+    let used_file_tagging = if file_tagging_enabled && supports_chat_file_tagging(source_app) {
+        let chunks = split_inject_chunks(text);
+        if chunks
+            .iter()
+            .any(|chunk| matches!(chunk, InjectChunk::FileTag(_)))
+        {
+            debug!("inject: using Cursor/Windsurf file-tag flow");
+            inject_chunks(app, &chunks).await?;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if !used_file_tagging {
+        paste_text_fragment(app, text).await?;
+    }
+
+    if let Some(prev) = saved {
+        tokio::time::sleep(Duration::from_millis(CLIPBOARD_RESTORE_DELAY_MS)).await;
+        debug!("inject: restoring clipboard");
+        if let Err(e) = app.clipboard().write_text(prev) {
+            warn!("could not restore clipboard: {}", e);
+        }
+    }
+
+    debug!("injected {} chars", text.len());
+    Ok(())
+}
+
+async fn inject_chunks(app: &AppHandle, chunks: &[InjectChunk]) -> Result<()> {
+    for chunk in chunks {
+        match chunk {
+            InjectChunk::Text(text) => {
+                if !text.is_empty() {
+                    paste_text_fragment(app, text).await?;
+                }
+            }
+            InjectChunk::FileTag(query) => {
+                debug!("inject: committing file tag {:?}", query);
+                paste_text_fragment(app, "@").await?;
+                tokio::time::sleep(Duration::from_millis(CLIPBOARD_SETTLE_DELAY_MS)).await;
+                paste_text_fragment(app, query).await?;
+                tokio::time::sleep(Duration::from_millis(MENTION_MENU_DELAY_MS)).await;
+                tokio::time::timeout(
+                    Duration::from_secs(2),
+                    key_click_on_main_thread(app.clone(), Key::Return),
+                )
+                .await
+                .context("mention commit timed out")?
+                .context("confirm file mention")?;
+                tokio::time::sleep(Duration::from_millis(MENTION_COMMIT_SETTLE_MS)).await;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn paste_text_fragment(app: &AppHandle, text: &str) -> Result<()> {
+    if text.is_empty() {
+        return Ok(());
+    }
+
     debug!("inject: writing transcript to clipboard");
     app.clipboard()
         .write_text(text)
         .context("write transcript to clipboard")?;
 
-    tokio::time::sleep(Duration::from_millis(40)).await;
+    tokio::time::sleep(Duration::from_millis(CLIPBOARD_SETTLE_DELAY_MS)).await;
 
     debug!("inject: scheduling paste keystroke");
     tokio::time::timeout(
@@ -59,16 +141,6 @@ pub async fn inject(app: &AppHandle, text: &str, preserve_clipboard: bool) -> Re
     .context("paste keystroke timed out")?
     .context("synthesize paste")?;
     debug!("inject: paste keystroke finished");
-
-    if let Some(prev) = saved {
-        tokio::time::sleep(Duration::from_millis(180)).await;
-        debug!("inject: restoring clipboard");
-        if let Err(e) = app.clipboard().write_text(prev) {
-            warn!("could not restore clipboard: {}", e);
-        }
-    }
-
-    debug!("injected {} chars", text.len());
     Ok(())
 }
 
@@ -82,6 +154,19 @@ async fn paste_keystroke_on_main_thread(app: AppHandle) -> Result<()> {
 
     rx.await
         .context("main-thread paste callback dropped")?
+        .map_err(anyhow::Error::msg)
+}
+
+async fn key_click_on_main_thread(app: AppHandle, key: Key) -> Result<()> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<std::result::Result<(), String>>();
+    app.run_on_main_thread(move || {
+        let result = key_click(key).map_err(|e| e.to_string());
+        let _ = tx.send(result);
+    })
+    .context("schedule key click on main thread")?;
+
+    rx.await
+        .context("main-thread key callback dropped")?
         .map_err(anyhow::Error::msg)
 }
 
@@ -102,4 +187,105 @@ fn paste_keystroke() -> Result<()> {
         .key(mod_key, Direction::Release)
         .context("release paste modifier")?;
     Ok(())
+}
+
+fn key_click(key: Key) -> Result<()> {
+    let mut enigo = Enigo::new(&Settings::default()).context("enigo init")?;
+    enigo.key(key, Direction::Click).context("click key")?;
+    Ok(())
+}
+
+fn supports_chat_file_tagging(source_app: Option<&str>) -> bool {
+    let lower = source_app.unwrap_or_default().trim().to_ascii_lowercase();
+    lower == "cursor" || lower == "windsurf"
+}
+
+fn split_inject_chunks(text: &str) -> Vec<InjectChunk> {
+    let mut chunks = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(relative_at) = text[cursor..].find('@') {
+        let at_index = cursor + relative_at;
+        if let Some((query, end_index)) = parse_file_tag_query(text, at_index) {
+            if at_index > cursor {
+                chunks.push(InjectChunk::Text(text[cursor..at_index].to_string()));
+            }
+            chunks.push(InjectChunk::FileTag(query.to_string()));
+            cursor = end_index;
+        } else {
+            let next_index = at_index + '@'.len_utf8();
+            if next_index > cursor {
+                chunks.push(InjectChunk::Text(text[cursor..next_index].to_string()));
+                cursor = next_index;
+            } else {
+                break;
+            }
+        }
+    }
+
+    if cursor < text.len() {
+        chunks.push(InjectChunk::Text(text[cursor..].to_string()));
+    }
+
+    chunks
+}
+
+fn parse_file_tag_query(text: &str, at_index: usize) -> Option<(&str, usize)> {
+    let query_start = at_index + '@'.len_utf8();
+    if query_start >= text.len() {
+        return None;
+    }
+
+    let mut query_end = query_start;
+    for (offset, ch) in text[query_start..].char_indices() {
+        if is_file_tag_char(ch) {
+            query_end = query_start + offset + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    if query_end == query_start {
+        return None;
+    }
+
+    let query = &text[query_start..query_end];
+    if !has_known_file_extension(query) {
+        return None;
+    }
+
+    Some((query, query_end))
+}
+
+fn is_file_tag_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/')
+}
+
+fn has_known_file_extension(query: &str) -> bool {
+    const KNOWN_FILE_EXTENSIONS: &[&str] = &[
+        ".c", ".cc", ".cpp", ".css", ".go", ".h", ".hpp", ".html", ".java", ".js", ".json", ".jsx",
+        ".md", ".mdx", ".py", ".rs", ".sql", ".swift", ".toml", ".ts", ".tsx", ".txt", ".xml",
+        ".yaml", ".yml",
+    ];
+
+    let lower = query.to_ascii_lowercase();
+    KNOWN_FILE_EXTENSIONS
+        .iter()
+        .any(|extension| lower.ends_with(extension))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{split_inject_chunks, InjectChunk};
+
+    #[test]
+    fn splits_cursor_mentions_into_actionable_chunks() {
+        let chunks = split_inject_chunks("Check @user.ts and @src/auth.tsx before shipping.");
+        assert_eq!(chunks.len(), 5);
+        assert!(matches!(&chunks[0], InjectChunk::Text(text) if text == "Check "));
+        assert!(matches!(&chunks[1], InjectChunk::FileTag(tag) if tag == "user.ts"));
+        assert!(matches!(&chunks[2], InjectChunk::Text(text) if text == " and "));
+        assert!(matches!(&chunks[3], InjectChunk::FileTag(tag) if tag == "src/auth.tsx"));
+        assert!(matches!(&chunks[4], InjectChunk::Text(text) if text == " before shipping."));
+    }
 }

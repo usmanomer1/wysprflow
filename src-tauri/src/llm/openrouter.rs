@@ -7,7 +7,9 @@ use serde::Deserialize;
 use serde_json::json;
 use tracing::info;
 
-use super::build_system_prompt;
+use super::{
+    apply_best_effort_output_transforms, build_system_prompt, should_run_cleanup, CleanupContext,
+};
 use crate::settings::DictationConfig;
 
 pub struct OpenRouterClient {
@@ -45,16 +47,14 @@ impl OpenRouterClient {
         transcript: &str,
         cfg: &DictationConfig,
         dictionary: &[String],
+        context: &CleanupContext,
     ) -> Result<String> {
-        let should_bypass = cfg.auto_cleanup == "none"
-            && (cfg.translate_to == "same" || cfg.translate_to.trim().is_empty())
-            && cfg.custom_cleanup_prompt.trim().is_empty();
-        if should_bypass {
-            return Ok(transcript.to_string());
+        if !should_run_cleanup(cfg, context) {
+            return Ok(apply_best_effort_output_transforms(transcript, context));
         }
 
         let model = pick_model(&cfg.llm_model);
-        let system = build_system_prompt(cfg, dictionary);
+        let system = build_system_prompt(cfg, dictionary, context);
 
         let body = json!({
             "model": model,
@@ -102,7 +102,7 @@ impl OpenRouterClient {
         if trimmed.eq_ignore_ascii_case("EMPTY") {
             return Ok(String::new());
         }
-        Ok(trimmed.to_string())
+        Ok(apply_best_effort_output_transforms(trimmed, context))
     }
 }
 

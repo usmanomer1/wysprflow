@@ -31,6 +31,7 @@ export interface DictationConfig {
   microphoneDevice: string;
   preserveClipboard: boolean;
   playSounds: boolean;
+  ideFileTagging: boolean;
   translateTo: string;
   snippetsEnabled: boolean;
   customCleanupPrompt: string;

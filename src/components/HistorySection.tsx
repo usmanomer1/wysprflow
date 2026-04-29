@@ -167,6 +167,7 @@ function Entry({
             <span className="font-mono">{time}</span>
             {entry.wordCount > 0 ? <span>{entry.wordCount} words</span> : null}
             {wpm !== null ? <span>{wpm} wpm</span> : null}
+            {entry.sourceApp ? <span>in {entry.sourceApp}</span> : null}
           </div>
           <div className="line-clamp-1 text-sm">
             {entry.error ?? entry.cleanedTranscript ?? "(empty)"}

@@ -1,6 +1,7 @@
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
+mod app_context;
 mod audio;
 mod ax;
 mod commands;
